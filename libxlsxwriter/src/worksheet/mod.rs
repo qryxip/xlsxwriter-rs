@@ -43,20 +43,82 @@ pub struct ImageOptions {
     pub x_scale: f64,
     /// Y scale of the image as a decimal.
     pub y_scale: f64,
+    pub object_position: ObjectPosition,
+    pub description: Option<String>,
+    pub decorative: bool,
+    pub url: Option<String>,
+    pub tip: Option<String>,
 }
 
-impl From<&ImageOptions> for libxlsxwriter_sys::lxw_image_options {
-    fn from(options: &ImageOptions) -> Self {
-        libxlsxwriter_sys::lxw_image_options {
-            x_offset: options.x_offset,
-            y_offset: options.y_offset,
-            x_scale: options.x_scale,
-            y_scale: options.y_scale,
-            description: std::ptr::null_mut(),
-            url: std::ptr::null_mut(),
-            tip: std::ptr::null_mut(),
-            object_position: 0,
-            decorative: 0,
+impl ImageOptions {
+    unsafe fn with<T>(&self, f: impl FnOnce(&mut libxlsxwriter_sys::lxw_image_options) -> T) -> T {
+        let description = CStringPtr::new(&self.description);
+        let url = CStringPtr::new(&self.url);
+        let tip = CStringPtr::new(&self.tip);
+
+        return f(&mut libxlsxwriter_sys::lxw_image_options {
+            x_offset: self.x_offset,
+            y_offset: self.y_offset,
+            x_scale: self.x_scale,
+            y_scale: self.y_scale,
+            object_position: self.object_position.into(),
+            description: description.0,
+            decorative: self.decorative.into(),
+            url: url.0,
+            tip: tip.0,
+        });
+
+        struct CStringPtr(*mut c_char);
+
+        impl CStringPtr {
+            fn new(s: &Option<String>) -> Self {
+                Self(if let Some(s) = s {
+                    CString::new(&**s).unwrap().into_raw()
+                } else {
+                    std::ptr::null_mut()
+                })
+            }
+        }
+
+        impl Drop for CStringPtr {
+            fn drop(&mut self) {
+                if !self.0.is_null() {
+                    drop(unsafe { CString::from_raw(self.0) });
+                }
+            }
+        }
+    }
+}
+
+#[derive(Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
+#[non_exhaustive]
+pub enum ObjectPosition {
+    #[default]
+    PositionDefault,
+    MoveAndSize,
+    MoveDontSize,
+    DontMoveDontSize,
+    MoveAndSizeAfter,
+}
+
+impl From<ObjectPosition> for u8 {
+    fn from(pos: ObjectPosition) -> Self {
+        match pos {
+            ObjectPosition::PositionDefault => {
+                libxlsxwriter_sys::lxw_object_position_LXW_OBJECT_POSITION_DEFAULT as _
+            }
+            ObjectPosition::MoveAndSize => {
+                libxlsxwriter_sys::lxw_object_position_LXW_OBJECT_MOVE_AND_SIZE as _
+            }
+            ObjectPosition::MoveDontSize => {
+                libxlsxwriter_sys::lxw_object_position_LXW_OBJECT_MOVE_DONT_SIZE as _
+            }
+            ObjectPosition::DontMoveDontSize => {
+                libxlsxwriter_sys::lxw_object_position_LXW_OBJECT_DONT_MOVE_DONT_SIZE as _
+            }
+            ObjectPosition::MoveAndSizeAfter => {
+                libxlsxwriter_sys::lxw_object_position_LXW_OBJECT_MOVE_AND_SIZE_AFTER as _
+            }
         }
     }
 }
@@ -1241,6 +1303,11 @@ impl<'a> Worksheet<'a> {
     ///         y_offset: 30,
     ///         x_scale: 0.5,
     ///         y_scale: 0.5,
+    ///         object_position: ObjectPosition::PositionDefault,
+    ///         description: None,
+    ///         decorative: false,
+    ///         url: None,
+    ///         tip: None,
     ///     }
     /// )?;
     /// # workbook.close()
@@ -1257,15 +1324,17 @@ impl<'a> Worksheet<'a> {
         filename: &str,
         opt: &ImageOptions,
     ) -> Result<(), XlsxError> {
-        let mut opt_struct = opt.into();
+        let filename = CString::new(filename)?;
         unsafe {
-            let result = libxlsxwriter_sys::worksheet_insert_image_opt(
-                self.worksheet,
-                row,
-                col,
-                CString::new(filename)?.as_c_str().as_ptr(),
-                &mut opt_struct,
-            );
+            let result = opt.with(|opt_struct| {
+                libxlsxwriter_sys::worksheet_insert_image_opt(
+                    self.worksheet,
+                    row,
+                    col,
+                    filename.as_c_str().as_ptr(),
+                    opt_struct,
+                )
+            });
             if result == libxlsxwriter_sys::lxw_error_LXW_NO_ERROR {
                 Ok(())
             } else {
@@ -1315,16 +1384,17 @@ impl<'a> Worksheet<'a> {
         buffer: &[u8],
         opt: &ImageOptions,
     ) -> Result<(), XlsxError> {
-        let mut opt_struct = opt.into();
         unsafe {
-            let result = libxlsxwriter_sys::worksheet_insert_image_buffer_opt(
-                self.worksheet,
-                row,
-                col,
-                buffer.as_ptr(),
-                buffer.len(),
-                &mut opt_struct,
-            );
+            let result = opt.with(|opt_struct| {
+                libxlsxwriter_sys::worksheet_insert_image_buffer_opt(
+                    self.worksheet,
+                    row,
+                    col,
+                    buffer.as_ptr(),
+                    buffer.len(),
+                    opt_struct,
+                )
+            });
             if result == libxlsxwriter_sys::lxw_error_LXW_NO_ERROR {
                 Ok(())
             } else {
